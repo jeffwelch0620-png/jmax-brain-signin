@@ -1,0 +1,1 @@
+Sign-in and approval page for the JMax business brain connector. Contains only public values (Supabase project URL and publishable key). Source of truth: jmax-knowledge/brain/connector/consent/index.html.

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JMax Brain sign-in</title>
+<!-- Sign-in + approval page for the jmax-brain connector (Supabase Auth OAuth 2.1 consent screen).
+     Contains only the project URL and the PUBLISHABLE key, both public by design; all access is
+     enforced by Supabase Auth and the brain's row-level security. -->
+<style>
+  :root{--bg:#f6f7f9;--panel:#fff;--fg:#1b2330;--muted:#5b6676;--line:#d5dbe3;--accent:#1258B9;--err:#b42318}
+  @media (prefers-color-scheme:dark){:root{--bg:#11161d;--panel:#18202a;--fg:#e4e9f0;--muted:#9aa6b6;--line:#2c3744;--accent:#6ea2ef;--err:#f97066;color-scheme:dark}}
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
+  main{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;max-width:420px;width:100%;display:flex;flex-direction:column;gap:14px}
+  h1{font-size:1.3rem;margin:0}
+  p{margin:0;color:var(--muted)}
+  label{font-size:.9rem;font-weight:600}
+  input{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;width:100%;box-sizing:border-box}
+  button{font:inherit;font-weight:600;padding:10px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+  button.secondary{background:transparent;color:var(--fg);border-color:var(--line)}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .err{color:var(--err)}
+  ul{margin:0;padding-left:1.2em;color:var(--muted)}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>JMax business brain</h1>
+
+  <section id="s-email" hidden>
+    <p>Sign in with the email your brain account uses. We'll email you a 6-digit code.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" required>
+    <button id="send">Email me a code</button>
+  </section>
+
+  <section id="s-code" hidden>
+    <p id="code-msg">Enter the 6-digit code from the email.</p>
+    <label for="code">Code</label>
+    <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10">
+    <div class="row"><button id="verify">Sign in</button><button class="secondary" id="back">Use a different email</button></div>
+  </section>
+
+  <section id="s-consent" hidden>
+    <p><b id="client"></b> wants to use the brain as <b id="who"></b>.</p>
+    <p>It will be able to search, read and save to the JMax brain with your access.</p>
+    <ul id="scopes"></ul>
+    <div class="row"><button id="approve">Allow</button><button class="secondary" id="deny">Deny</button></div>
+  </section>
+
+  <p id="status"></p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.86.0/dist/umd/supabase.min.js"></script>
+<script>
+  const SUPABASE_URL = "https://syjcxvjbrchqrllatiwr.supabase.co";
+  const PUBLISHABLE_KEY = "sb_publishable_siM11WsYoGCsUjmPAS-QTA_4uvZc6TU";
+  const sb = supabase.createClient(SUPABASE_URL, PUBLISHABLE_KEY);
+  const authId = new URLSearchParams(location.search).get("authorization_id");
+  const $ = (id) => document.getElementById(id);
+  const show = (id) => ["s-email","s-code","s-consent"].forEach(s => $(s).hidden = s !== id);
+  const status = (msg, err) => { $("status").textContent = msg || ""; $("status").className = err ? "err" : ""; };
+
+  async function consent() {
+    if (!authId) { show(null); status("This page is opened by Claude or ChatGPT when you connect the brain. Nothing to do here."); return; }
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) { show("s-email"); return; }
+    const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authId);
+    if (error) { status(error.message, true); return; }
+    if (!("authorization_id" in data) && data.redirect_url) { location.href = data.redirect_url; return; }
+    $("client").textContent = data.client?.name || "An app";
+    $("who").textContent = user.email;
+    $("scopes").replaceChildren(...(data.scope || "").split(" ").filter(Boolean).map(s => Object.assign(document.createElement("li"), { textContent: s })));
+    show("s-consent");
+  }
+
+  $("send").onclick = async () => {
+    const email = $("email").value.trim();
+    if (!email) return status("Enter your email.", true);
+    status("Sending…");
+    const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+    if (error) return status(error.message.includes("Signups not allowed") ? "That email doesn't have a brain account. Ask Jeff." : error.message, true);
+    $("code-msg").textContent = `We emailed a code to ${email}. Enter it here.`;
+    status(""); show("s-code"); $("code").focus();
+  };
+  $("verify").onclick = async () => {
+    status("Checking…");
+    const { error } = await sb.auth.verifyOtp({ email: $("email").value.trim(), token: $("code").value.trim(), type: "email" });
+    if (error) return status("That code didn't work. Check it, or send a new one.", true);
+    status(""); consent();
+  };
+  $("back").onclick = () => { status(""); show("s-email"); };
+  $("approve").onclick = async () => {
+    const { data, error } = await sb.auth.oauth.approveAuthorization(authId);
+    if (error) return status(error.message, true);
+    status("Allowed. Returning you to the app…"); location.href = data.redirect_url;
+  };
+  $("deny").onclick = async () => {
+    const { data, error } = await sb.auth.oauth.denyAuthorization(authId);
+    if (error) return status(error.message, true);
+    location.href = data.redirect_url;
+  };
+  consent();
+</script>
+</body>
+</html>
